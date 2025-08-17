@@ -2,28 +2,23 @@
 # -*- coding: utf-8 -*-
 """
 Programa multiproceso para ejecutar Litterbox por lotes leyendo **una lista de proyectos**
-desde un CSV (cada fila = un proyecto). Inspirado en el script PowerShell original.
+desde un CSV (cada fila = un proyecto).
 
-Novedad: opción para **un único CSV por hilo (worker)**, de forma que al finalizar
-basta con concatenar N ficheros (uno por proceso) o incluso trabajar con ellos tal cual.
-Además, ahora puedes **consolidar** automáticamente todos los CSV en **uno solo** con `--consolidate`.
+NOVEDADES de esta versión:
+- **Reanudación automática** con `--auto-resume`: salta automáticamente los proyectos ya
+  presentes en `ok_projects.txt` y reintenta los que estén en `failed_projects.txt`.
+  (En la práctica: procesa **todos los del CSV excepto los que ya están OK**.)
+- **`--skip-failed`** (nuevo): junto con `--auto-resume`, permite **ignorar también** los
+  que ya están en `failed_projects.txt` (útil para continuar solo con nuevos pendientes).
+- **Sin basura temporal**: los ficheros temporales `project_*.txt` (1 línea con el proyecto)
+  se crean para la llamada a `--project-list` pero se **eliminan siempre** al terminar
+  cada ejecución, incluso en caso de error/timeout.
+- Mantiene **solo** ficheros de estado: `ok_projects.txt`, `failed_projects.txt`,
+  `last_project_processed.txt`.
+- Opción `--single-csv-per-worker` para escribir un único CSV por proceso.
+- Opción `--consolidate` para generar un único CSV unificado al final.
 
-Características:
-- Lee proyectos desde un CSV (si hay cabecera: `project`/`proyecto`; si no, 1ª columna).
-- Modo por defecto: 1 proceso por proyecto, CSV por proyecto (`litter_results_<token>.csv`).
-- Modo `--single-csv-per-worker`: reparte proyectos en `max-workers` buckets; cada proceso
-  escribe a su CSV único (`litter_results_worker_XX.csv`) y va anexando.
-- `--consolidate`: al terminar, crea `litter_results_all.csv` uniendo todos los CSV generados
-  (por proyecto o por worker, según el modo), sin duplicar cabeceras.
-- Compatibilidad con Litterbox: se llama a `--project-list` con un fichero temporal que
-  contiene **un único proyecto** por ejecución.
-- Timeout configurable (27 min por defecto) por proyecto.
-- Directorios configurables para resultados, logs y temporales.
-- Archivos de estado incrementales: `last_project_processed.txt`, `ok_projects.txt`,
-  `failed_projects.txt`.
-- Reintentos opcionales y opción `--resume-failed`.
-
-Uso rápido (CSV por worker + consolidación):
+Uso rápido (reanudación automática + CSV por worker + consolidación):
     python multiproceso_litterbox.py \
       --csv "C:/propios/Doc_sin_respaldo_nube/down_sb3/sb3_litter.csv" \
       --jar "C:/ruta/a/Litterbox-1.9.2.full.jar" \
@@ -31,8 +26,9 @@ Uso rápido (CSV por worker + consolidación):
       --output-dir "C:/lit_results" \
       --logs-dir "C:/logs_litterbox" \
       --tmp-dir "C:/tmp_litterbox" \
+      --state-dir "C:/estado_litterbox" \
       --max-workers 4 --timeout 1620 \
-      --single-csv-per-worker --consolidate
+      --single-csv-per-worker --consolidate --auto-resume
 
 Requisitos:
 - Python 3.9+
@@ -48,7 +44,7 @@ import subprocess
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Iterable, List, Optional, Sequence, Tuple, Set
 import logging
 from logging.handlers import RotatingFileHandler
 
@@ -77,7 +73,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--logs-dir", default=str(Path.cwd() / "logs_litterbox"),
                    help="Directorio para logs (por defecto ./logs_litterbox)")
     p.add_argument("--tmp-dir", default=str(Path.cwd() / "tmp_litterbox"),
-                   help="Directorio para ficheros temporales de project-list (uno por proyecto)")
+                   help="Directorio para ficheros temporales (se eliminan tras cada ejecución)")
+    p.add_argument("--state-dir", default=str(Path.cwd()),
+                   help="Directorio para ok/failed/last_processed (por defecto = CWD)")
     p.add_argument("--java-bin", default="java", help="Binario de Java si no está en PATH")
     p.add_argument("--timeout", type=int, default=27*60,
                    help="Timeout por proyecto en segundos (defecto 1620 = 27 min)")
@@ -85,7 +83,11 @@ def parse_args() -> argparse.Namespace:
                    help="Número máximo de procesos en paralelo")
     p.add_argument("--retries", type=int, default=0, help="Reintentos por proyecto fallido")
     p.add_argument("--resume-failed", action="store_true",
-                   help="Si existe failed_projects.txt, reintenta solo esos en lugar del CSV")
+                   help="(Legacy) Procesa únicamente los que figuran en failed_projects.txt")
+    p.add_argument("--auto-resume", action="store_true",
+                   help="Reanudación automática: salta los OK y reintenta los FAIL del CSV original")
+    p.add_argument("--skip-failed", action="store_true",
+                   help="Usado con --auto-resume: ignora también los que ya figuran como FAIL")
     p.add_argument("--single-csv-per-worker", action="store_true",
                    help="Crea un único CSV por proceso/worker, consolidando resultados en caliente")
     p.add_argument("--consolidate", action="store_true",
@@ -142,11 +144,10 @@ def append_failed(base_dir: Path, project: str) -> None:
         f.write(str(project) + "\n")
 
 
-def read_failed_list(base_dir: Path) -> List[str]:
-    ff = base_dir / FAILED_FILENAME
-    if not ff.exists():
-        return []
-    return [line.strip() for line in ff.read_text(encoding="utf-8").splitlines() if line.strip()]
+def read_list(path: Path) -> Set[str]:
+    if not path.exists():
+        return set()
+    return {line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()}
 
 
 def load_jobs_from_csv(csv_path: Path) -> List[JobSpec]:
@@ -187,8 +188,8 @@ def load_jobs_from_csv(csv_path: Path) -> List[JobSpec]:
 def run_litterbox(java_bin: str, jar_path: Path, project: str, results_dir: Path, output_csv: Path,
                   timeout: int, tmp_dir: Path, dry_run: bool = False) -> Tuple[bool, str, Optional[int]]:
     """Ejecuta Litterbox para **un proyecto**, escribiendo a un CSV dado.
-    Para compatibilidad con la CLI, generamos un fichero temporal de lista con un solo proyecto
-    y lo pasamos por `--project-list`.
+    Crea un fichero temporal con un solo proyecto para pasarlo a `--project-list` y
+    LO ELIMINA SIEMPRE al finalizar.
     """
     tmp_dir.mkdir(parents=True, exist_ok=True)
     token = derive_token_from_project(project)
@@ -203,6 +204,12 @@ def run_litterbox(java_bin: str, jar_path: Path, project: str, results_dir: Path
     ]
 
     if dry_run:
+        # Limpieza inmediata en dry-run también
+        try:
+            if list_file.exists():
+                list_file.unlink()
+        except Exception:
+            pass
         return True, f"DRY-RUN: {' '.join(cmd)}", 0
 
     try:
@@ -218,15 +225,19 @@ def run_litterbox(java_bin: str, jar_path: Path, project: str, results_dir: Path
         return False, f"No se encontró ejecutable: {ex}", None
     except Exception as ex:
         return False, f"Error inesperado: {ex}", None
+    finally:
+        # SIEMPRE eliminar el listado temporal del proyecto
+        try:
+            if list_file.exists():
+                list_file.unlink()
+        except Exception:
+            pass
 
 
 # ===== Utilidades CSV =====
 
 def append_csv_rows(src: Path, dst: Path) -> None:
-    """Añade el contenido de `src` a `dst` evitando duplicar la cabecera.
-    Si `dst` no existe, copia íntegro. Si existe, salta la primera línea de `src`.
-    Asume que Litterbox produce CSV con cabecera en la primera línea.
-    """
+    """Añade el contenido de `src` a `dst` evitando duplicar la cabecera."""
     if not src.exists():
         return
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -260,7 +271,6 @@ def consolidate_csvs(output_dir: Path, pattern: str, dest_name: str = "litter_re
                         if not header_written:
                             fdst.write(line)
                             header_written = True
-                        # si ya había cabecera, la saltamos
                     else:
                         fdst.write(line)
     return dest
@@ -324,39 +334,64 @@ def worker_loop(worker_idx: int, specs: List[JobSpec], args: argparse.Namespace,
 def main() -> int:
     args = parse_args()
 
-    base_dir = Path.cwd()
+    state_dir = Path(args.state_dir)
+    base_dir = state_dir
     logs_dir = Path(args.logs_dir)
-    ensure_dirs(Path(args.results_dir), Path(args.output_dir), Path(args.tmp_dir), logs_dir)
+    ensure_dirs(Path(args.results_dir), Path(args.output_dir), Path(args.tmp_dir), logs_dir, state_dir)
     setup_logging(logs_dir)
 
     logger = logging.getLogger(__name__)
 
-    # Determinar conjunto de trabajos
-    if args.resume_failed:
-        failed_projects = read_failed_list(base_dir)
-        if not failed_projects:
-            logging.info("No hay failed_projects.txt o está vacío; se usará el CSV completo.")
-            jobs = load_jobs_from_csv(Path(args.csv))
-        else:
-            jobs = [JobSpec(project=p, token=derive_token_from_project(p)) for p in failed_projects]
-            logging.info("Reanudando únicamente %d proyectos de failed_projects.txt", len(jobs))
-    else:
-        jobs = load_jobs_from_csv(Path(args.csv))
-
-    if not jobs:
-        logging.error("No se encontraron proyectos a partir del CSV/failed_projects.")
+    # Cargar proyectos del CSV
+    all_jobs = load_jobs_from_csv(Path(args.csv))
+    if not all_jobs:
+        logging.error("No se encontraron proyectos en el CSV.")
         return 2
 
-    logging.info("Se procesarán %d proyectos con hasta %d procesos.", len(jobs), args.max_workers)
+    # Cargar estado existente si procede
+    ok_set = read_list(base_dir / OK_FILENAME)
+    failed_set = read_list(base_dir / FAILED_FILENAME)
 
-    # Limpiar listas de estado para esta ejecución (se regenerarán)
-    (base_dir / FAILED_FILENAME).unlink(missing_ok=True)
-    (base_dir / OK_FILENAME).unlink(missing_ok=True)
+    # Determinar conjunto de trabajos según flags
+    jobs: List[JobSpec]
+    if args.resume_failed:
+        # Modo legacy: solo fallidos
+        if not failed_set:
+            logging.info("No hay failed_projects.txt o está vacío; no hay nada que reanudar en modo --resume-failed.")
+            return 0
+        # Filtrar por los que estén además en el CSV (seguridad)
+        wanted = {j.project for j in all_jobs}
+        work = sorted(list(failed_set & wanted))
+        jobs = [JobSpec(project=p, token=derive_token_from_project(p)) for p in work]
+        logging.info("Reanudación (legacy) con %d proyectos fallidos.", len(jobs))
+        # No borrar estado
+    elif args.auto_resume:
+        # Procesar todos los del CSV excepto los que ya están OK; opcionalmente saltar FAIL
+        wanted = {j.project for j in all_jobs}
+        remaining_set = wanted - ok_set
+        if args.skip_failed:
+            remaining_set -= failed_set
+        remaining = sorted(list(remaining_set))
+        jobs = [JobSpec(project=p, token=derive_token_from_project(p)) for p in remaining]
+        logging.info("Auto-resume: %d pendientes (saltados %d OK%s).",
+                     len(jobs), len(ok_set & wanted),
+                     ", %d FAIL" % len(failed_set & wanted) if args.skip_failed else "", len(jobs), len(ok_set & wanted))
+        # No borrar estado
+    else:
+        # Ejecución limpia: reinicia estado
+        (base_dir / FAILED_FILENAME).unlink(missing_ok=True)
+        (base_dir / OK_FILENAME).unlink(missing_ok=True)
+        (base_dir / FAILED_FILENAME).touch(exist_ok=True)
+        (base_dir / OK_FILENAME).touch(exist_ok=True)
+        jobs = all_jobs
+        logging.info("Ejecución limpia con %d proyectos.", len(jobs))
+
+    logging.info("Se procesarán %d proyectos con hasta %d procesos.", len(jobs), args.max_workers)
 
     failures_total: List[str] = []
 
     if not args.single_csv_per_worker:
-        # ===== Modo por proyecto (comportamiento previo) =====
+        # ===== Modo por proyecto =====
         to_run: List[JobSpec] = jobs
         attempt = 0
         while to_run and attempt <= args.retries:
@@ -384,7 +419,7 @@ def main() -> int:
             failures_total.extend([s.project for s in current_failures])
             to_run = current_failures  # Reintentar solo los que fallaron
 
-        # Consolidación (modo por proyecto): unir todos los litter_results_*.csv en uno solo
+        # Consolidación
         if args.consolidate and not args.dry_run:
             logging.info("Consolidando CSVs por proyecto en un único archivo...")
             consolidate_csvs(Path(args.output_dir), pattern="litter_results_*.csv", dest_name="litter_results_all.csv")
@@ -413,31 +448,38 @@ def main() -> int:
             if all(len(b) == 0 for b in remaining_buckets):
                 break
 
-        # Consolidación (modo per-worker): unir los litter_results_worker_*.csv
+        # Consolidación
         if args.consolidate and not args.dry_run:
             logging.info("Consolidando CSVs de workers en un único archivo...")
             consolidate_csvs(Path(args.output_dir), pattern="litter_results_worker_*.csv", dest_name="litter_results_all.csv")
 
-    # Resumen al final en consola
-    ok_file = base_dir / OK_FILENAME
-    failed_file = base_dir / FAILED_FILENAME
+    # Resumen al final en consola (mostrar rutas absolutas)
+    ok_file = (base_dir / OK_FILENAME).resolve()
+    failed_file = (base_dir / FAILED_FILENAME).resolve()
+    last_file = (base_dir / LAST_PROCESSED_FILENAME).resolve()
     print("\nResumen:")
     if ok_file.exists():
         try:
             ok_count = sum(1 for _ in ok_file.open("r", encoding="utf-8"))
-            print(f"  OK: {ok_count} proyectos (ver {OK_FILENAME})")
+            print(f"  OK: {ok_count} proyectos (ver {ok_file})")
         except Exception:
             pass
     if failed_file.exists():
         try:
-            print("  Fallidos:")
-            with failed_file.open("r", encoding="utf-8") as f:
-                for line in f:
-                    print("   -", line.strip())
+            fail_lines = [line.strip() for line in failed_file.open("r", encoding="utf-8").read().splitlines() if line.strip()]
+            if fail_lines:
+                print("  Fallidos:")
+                for line in fail_lines:
+                    print("   -", line)
+            else:
+                print(f"  Fallidos: 0 (ver {failed_file})")
         except Exception:
             pass
-    else:
-        print("  Sin fallos. ¡Todos los proyectos se procesaron correctamente!")
+    if last_file.exists():
+        try:
+            print(f"  Último procesado: {last_file.read_text(encoding='utf-8').strip()} (archivo: {last_file})")
+        except Exception:
+            pass
 
     return 0 if not failures_total else 1
 
