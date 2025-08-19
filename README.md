@@ -1,6 +1,13 @@
 # BS survey utils
 
-This repository contains two Python scripts designed to automate and parallelize the processing of Scratch projects using [Litterbox](https://github.com/Niebert/Litterbox), as well as fetching project titles from the Scratch API.
+This repository contains utilities and data developed to support the **registered report**:
+**[How Do Code Smells Affect Skill Growth in Scratch Novice Programmers?](https://arxiv.org/abs/2507.17314)**
+
+It includes two Python scripts designed to automate and parallelize the processing of Scratch projects using [Litterbox](https://github.com/Niebert/Litterbox), as well as fetching project titles from the Scratch API.
+
+This work builds upon and complements the following repositories:
+- [scratch_anonymous_downloader_multiprocess](https://github.com/rharagon/scratch_anonymous_downloader_multiprocess)
+- [DrScratch-by-Console](https://github.com/rharagon/DrScratch-by-Console)
 
 ---
 
