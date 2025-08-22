@@ -15,6 +15,10 @@ This work builds upon and complements the following repositories:
 
 - [197_BSsurvey_multiproceso_litterbox.py](#197_bssurvey_multiproceso_litterboxpy)
 - [198_BSsurvey_get_multi_filenames.py](#198_bssurvey_get_multi_filenamespy)
+- [extract_scratch_meta.py](#extract_scratch_metapy)
+- [sb3_pick.sh](#sb3_picksh)
+- [pick_sb3.ps1](#pick_sb3ps1)
+- [wrangling_combining_RR.R](#wrangling_combining_rrr)
 
 ---
 
@@ -99,10 +103,80 @@ python 198_BSsurvey_get_multi_filenames.py
 
 ---
 
+## extract_scratch_meta.py
+
+### Overview
+A tool to **extract metadata** from downloaded Scratch `.sb3` files using the public Scratch API.
+It scans a folder, optionally recursively, and writes a CSV containing project titles, authors, dates, and remix lineage.
+
+### Key Features
+- **Automatic ID Detection**: Derives the project ID from each filename.
+- **Parallel Requests**: Uses threads or processes for faster API calls.
+- **Robust Output**: Stores errors alongside metadata for later review.
+- **Progress Bar**: Reports progress via `tqdm`.
+
+### Usage Example
+```bash
+python extract_scratch_meta.py --input path/to/sb3_dir --output meta.csv --workers 4
+```
+
+---
+
+## sb3_pick.sh
+
+### Overview
+A **Bash** helper that gathers all `.sb3` files under a directory and packs them into a single ZIP archive while reporting counts and sizes.
+
+### Key Features
+- **Recursive Search**: Finds every `.sb3` file within the source directory.
+- **Portable Archive**: Creates a timestamped ZIP by default.
+- **Summary Report**: Prints totals for files, sizes, and elapsed time.
+
+### Usage Example
+```bash
+./sb3_pick.sh path/to/source [output.zip]
+```
+
+---
+
+## pick_sb3.ps1
+
+### Overview
+A **PowerShell** script that copies all `.sb3` files from the current directory tree into a destination folder.
+
+### Key Features
+- **Destination Check**: Creates the target directory if it does not exist.
+- **Verbose Copy**: Logs each file copied for easy tracking.
+
+### Usage Example
+```powershell
+./pick_sb3.ps1 -Destino C:\ruta\destino
+```
+
+---
+
+## wrangling_combining_RR.R
+
+### Overview
+An **R** script employing the `tidyverse` to combine titles and analysis results from multiple CSV sources, removing duplicates and aligning column names.
+
+### Key Features
+- **Dataset Merging**: Joins Litterbox outputs with DrScratch results.
+- **Column Normalisation**: Renames and filters fields for compatibility.
+- **Export Helpers**: Writes consolidated datasets back to CSV.
+
+### Usage Example
+```r
+Rscript wrangling_combining_RR.R
+```
+
+---
+
 ## Requirements
 - Python 3.9+
 - Java (for Litterbox)
-- Required Python packages: `pandas`, `requests`
+- R with `tidyverse` package (for data wrangling script)
+- Required Python packages: `pandas`, `requests`, `tqdm`
 
 ---
 
