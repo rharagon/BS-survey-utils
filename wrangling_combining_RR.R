@@ -81,9 +81,55 @@ X_TT_actualizado <- bind_rows(X_TT, nuevas_obs)
 # Falta añadir los metadatos ausentes
 #########
 
-X_TT_actualizado |> write_csv("C:/propios/Doc_sin_respaldo_nube/down_sb3/X_TT_completo.csv")
+# Buscar duplicados
+X_TT_actualizado %>% filter(duplicated(.) | duplicated(., fromLast = TRUE))
+X_TT_actualizado |>
+  group_by_all() |>
+  filter(n()>1) |>
+  ungroup()
+
+X_TT_actualizado <- X_TT_actualizado |> distinct()
+X_TT_actualizado[!duplicated(X_TT_actualizado), ]
+
+#Cargar archivos con metadatas adicionales a añadir
+dataset_unido_meta <- read_csv("C:/propios/Doc_sin_respaldo_nube/down_sb3/CT_results_meta_nuevo.csv")
+X_titles <- read_csv("C:/propios/Doc_sin_respaldo_nube/down_sb3/X_TT_titles.csv")
+
+# Añadir a consolidado los nombres legacy
+X_TT_actualizado <- X_TT_actualizado %>%
+  left_join(
+    X_titles %>% 
+      rename(`Project title` = project_title),
+    by = c("project" = "filename")
+  )
+
+X_TT_actualizado <- X_TT_actualizado %>%
+  rows_update(
+    dataset_unido_meta %>%
+      rename(project = project_id) %>%
+      select(project, `Project title`, Author, `Creation date`, 
+             `Modified date`, `Remix parent id`, `Remix root id`),
+    by = "project", unmatched = "ignore"
+  )
 
 X_TT_actualizado %>%
-  filter(is.na(Author)) %>%
-  select(project) %>%      
-  distinct() |> count() ## Debe ser el mismo número de observaciones que registros tiene nuevas_observaciones. Cuando se complete el dataset con los metadatos deberan ser 0
+  filter(is.na(Author) | Author == "") %>%
+  summarise(n = n())
+
+# Ver registros con error en el nombre
+X_TT_actualizado %>%
+  filter(str_detect(`Project title`, "ERROR")) |> select(project,`Project title`)
+
+#Borrar las observaciones con ERROR por projecto no encontrado
+X_TT_actualizado <- X_TT_actualizado %>%
+  filter(!str_detect(`Project title`, "ERROR"))
+
+X_TT_actualizado %>%
+  filter(is.na(`Project title`) | `Project title` == "") %>%
+  summarise(n = n())
+
+# Salvar consolidado
+X_TT_actualizado |> write_csv("C:/propios/Doc_sin_respaldo_nube/down_sb3/X_TT_RR.csv")
+
+# Cargar consolidado
+X_TT_actualizado <- read_csv("C:/propios/Doc_sin_respaldo_nube/down_sb3/X_TT_RR.csv"
