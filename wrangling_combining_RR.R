@@ -157,5 +157,6 @@ X_TT_actualizado <- X_TT_actualizado %>%
 # Guardar dataset consolidado
 write_csv(X_TT_actualizado, "C:/propios/Doc_sin_respaldo_nube/down_sb3/X_TT_completo.csv")
 install.packages("arrow")
-arrow::write_parquet(muestra_aleatoria,"C:/propios/Doc_sin_respaldo_nube/down_sb3/X_TT_RR.parquet")
+arrow::write_parquet(X_TT_actualizado,"C:/propios/Doc_sin_respaldo_nube/down_sb3/X_TT_RR.parquet")
+
 
