@@ -156,18 +156,6 @@ X_TT_actualizado <- X_TT_actualizado %>%
 
 # Guardar dataset consolidado
 write_csv(X_TT_actualizado, "C:/propios/Doc_sin_respaldo_nube/down_sb3/X_TT_completo.csv")
+install.packages("arrow")
+arrow::write_parquet(muestra_aleatoria,"C:/propios/Doc_sin_respaldo_nube/down_sb3/X_TT_RR.parquet")
 
-# =============================================
-# SECCIÓN 7: Generar muestra aleatoria
-# =============================================
-set.seed(2000017)
-muestra_aleatoria <- X_TT_actualizado %>%
-  sample_n(2000017)
-
-# Guardar muestra aleatoria
-write_csv(muestra_aleatoria, "C:/propios/Doc_sin_respaldo_nube/down_sb3/X_TT_RR.csv")
-
-# =============================================
-# SECCIÓN 8: Cargar consolidado final (opcional)
-# =============================================
-X_TT_actualizado <- read_csv("C:/propios/Doc_sin_respaldo_nube/down_sb3/X_TT_completo.csv")
