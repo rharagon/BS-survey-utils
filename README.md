@@ -163,6 +163,7 @@ An **R** script employing the `tidyverse` to combine titles and analysis results
 ### Key Features
 - **Dataset Merging**: Joins Litterbox outputs with DrScratch results.
 - **Column Normalisation**: Renames and filters fields for compatibility.
+- **Sample method**: Nearest Neighbor Matching
 - **Export Helpers**: Writes consolidated datasets back to CSV.
 
 ### Usage Example
