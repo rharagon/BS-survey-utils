@@ -361,7 +361,27 @@ print(head(dist_check, 20))
 
 dist_check|>write_csv("check_AvsB_select.csv")
 
+# Transform Author to author identifiers using salted SHA-256 hashing
+library(digest)
+#A_completed <- read_csv("01_X_TT_RR.csv")
 
+# Definir los caracteres posibles (letras mayúsculas, minúsculas y números)
+caracteres <- c(
+  LETTERS,  # A-Z
+  letters,  # a-z
+  0:9       # 0-9
+)
+
+# Generar un salt aleatorio de 32 caracteres
+salt <- paste0(sample(caracteres, 32, replace = TRUE), collapse = "")
+write_file(salt,"salt.txt") # private salt--ONLY KNOW BY THE MAIN AUTHOR--
+
+salted_sha256 <- function(author, salt) {
+  digest(paste0(author, salt), algo = "sha256", serialize = FALSE)
+}
+
+A_completed <- A_completed %>%
+  mutate(Author = sapply(Author, salted_sha256, salt = salt))
 
 # Guardar muestra combinada con técnica nearest
 write_csv(A_completed, "./01_X_TT_RR.csv")
