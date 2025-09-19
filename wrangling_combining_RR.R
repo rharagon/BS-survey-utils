@@ -27,7 +27,7 @@ combined_titles <- bind_rows(multi_titles, nomulti_titles) %>%
 write_csv(combined_titles, "C:/propios/Doc_sin_respaldo_nube/down_sb3/sb3_titles.csv")
 
 # =============================================
-# SECCIÓN 2: Consolidar resultados de Litterbox y DrScratch
+# SECCIÓN 2: Consolidar resultados de Litterbox y DrScratch de (datos adicionales)
 # =============================================
 # Cargar resultados de Litterbox y DrScratch
 litter_results <- read_csv("./litter_results_all.csv")
@@ -48,7 +48,7 @@ dataset_unido <- litter_results %>%
   inner_join(drscratch_results, by = "project")
 
 # =============================================
-# SECCIÓN 3: Subsanar información de total_blocks - NO NECESARIO CARGAR Y UNIR CON ULTIMA VERSION DE Dr.ScratchConsole, Filtrado SI
+# SECCIÓN 3: Subsanar información de total_blocks - NO NECESARIO CARGAR Y UNIR CON ULTIMA VERSION DE Dr.ScratchConsole, Filtrado SI (datos adicionales)
 # =============================================
 total_block <- read_csv("./total_block.csv") %>%
   rename(project = project_id) %>%
@@ -71,7 +71,7 @@ dataset_unido <- anti_join(dataset_unido,df_control, by="project")
 write_csv(dataset_unido, "C:/propios/Doc_sin_respaldo_nube/down_sb3/X_TT_add.csv")
 
 # =============================================
-# SECCIÓN 4: Combinar con dataset existente (X_TT)
+# SECCIÓN 4: Combinar con dataset existente (X_TT) (datos adicionales y legacy)
 # =============================================
 # Cargar dataset existente
 X_TT <- read_csv("./X_TT.csv")
@@ -107,13 +107,48 @@ rm(missing_cols)
 # Unir datasets
 X_TT_actualizado <- bind_rows(X_TT, dataset_unido)
 
+
 # =============================================
-# SECCIÓN 5: Añadir metadatos ausentes
+# SECCIÓN 5: Añadir metadatos ausentes (datos adicionales y legacy)
 # =============================================
 # Cargar metadatos adicionales
 dataset_unido_meta <- read_csv("./01_meta_last.csv")
-X_titles <- read_csv("./X_TT_titles.csv")
-X_titles$project_title[is.na(X_titles$project_title)] <- ""
+X_titles <- read_csv("./X_TT_titles.csv")|> rename(
+  project = filename,
+  `Project title` = project_title
+)
+X_titles |> filter(is.na(`Project title`)) |> count()
+X_titles$`Project title`[is.na(X_titles$`Project title`)] <- ""
+X_titles |> filter(`Project title`=="") |> count()
+
+
+###
+### Si solo vamos a trabajar con datos legacy:
+###
+
+X_TT <- X_TT |> mutate(`Project title` = as.character(`Project title`))
+
+X_TT <- X_TT %>%
+  rows_update(
+    X_titles,
+    by = "project", unmatched = "ignore"
+  )
+
+glimpse(X_TT)
+
+X_TT <- X_TT %>%
+  mutate(across(where(is.double) & !any_of(c("project","Creation date", "Modified date", "Remix parent id", "Remix root id")), 
+                as.integer))
+
+X_TT <- X_TT %>%
+  filter(!str_detect(`Project title`, "ERROR"), !is.na(`Project title`), `Project title` != "")
+
+X_TT <- X_TT %>%
+  distinct()
+
+###
+### FIN PREPARACIÓN DATOS LEGACY, solo falta hash de autores y salvar en parquet
+###
 
 # Procesar títulos -- NO NECESARIO CON ULTIMA VERSION DE Dr.ScratchConsole, Filtrado SI
 dataset_unido_titles <- read_csv("C:/propios/Doc_sin_respaldo_nube/down_sb3/sb3_titles.csv") %>%
@@ -169,7 +204,7 @@ dataset_unido <- dataset_unido %>%
   filter(!str_detect(`Project title`, "ERROR"), !is.na(`Project title`), `Project title` != "")
 
 # =============================================
-# SECCIÓN 6: Eliminar duplicados y guardar consolidado
+# SECCIÓN 6: Eliminar duplicados y guardar consolidado (para añadir datos adicionales)
 # =============================================
 # Eliminar duplicados
 X_TT <- X_TT %>%
@@ -186,7 +221,7 @@ write_csv(dataset_unido, "./01_X_TT_adicionales.csv")
 arrow::write_parquet(muestra_aleatoria,"C:/propios/Doc_sin_respaldo_nube/down_sb3/X_TT_RR.parquet")
 
 # =============================================
-# SECCIÓN 7: Emplear Nearest Neighbor Matching para completar con 282,749 muestras adicionales para acercarnos a los 2Mill.
+# SECCIÓN 7: Emplear Nearest Neighbor Matching para completar con 282,749 muestras adicionales para acercarnos a los 2Mill. (para añadir datos adicionales)
 # =============================================
 #set.seed(2000017)
 #muestra_aleatoria <- X_TT_actualizado %>% sample_n(2000017)
@@ -361,7 +396,11 @@ print(head(dist_check, 20))
 
 dist_check|>write_csv("check_AvsB_select.csv")
 
-# Transform Author to author identifiers using salted SHA-256 hashing
+# =============================================
+# SECCIÓN 8: Transform Author to author identifiers using salted SHA-256 hashing (para datos adicionales y/o legacy)
+# =============================================
+
+
 library(digest)
 #A_completed <- read_csv("01_X_TT_RR.csv")
 
@@ -374,11 +413,13 @@ caracteres <- c(
 
 # Generar un salt aleatorio de 32 caracteres
 salt <- paste0(sample(caracteres, 32, replace = TRUE), collapse = "")
-write_file(salt,"salt.txt") # private salt--ONLY KNOW BY THE MAIN AUTHOR--
+write_file(salt,"salt_X_TT.txt") # private salt--ONLY KNOW BY THE MAIN AUTHOR--
 
 salted_sha256 <- function(author, salt) {
   digest(paste0(author, salt), algo = "sha256", serialize = FALSE)
 }
+
+X_TT <- X_TT |> mutate(Author = sapply(Author, salted_sha256, salt = salt)) # Datos legacy SOLO
 
 A_completed <- A_completed %>%
   mutate(Author = sapply(Author, salted_sha256, salt = salt))
@@ -387,3 +428,7 @@ A_completed <- A_completed %>%
 write_csv(A_completed, "./01_X_TT_RR.csv")
 write_csv(B_selected, "./01_X_TT_adicionales_selected.csv")
 arrow::write_parquet(A_completed,"./X_TT_RR.parquet")
+
+# SOLO SI trabaremos con datos legacy
+write_csv(X_TT, "./02_X_TT.csv")
+arrow::write_parquet(X_TT,"./02_X_TT.parquet")
